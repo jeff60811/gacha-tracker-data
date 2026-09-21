@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>二遊限時活動進度儀表板</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    @keyframes pulse-red { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+    .urgent-glow { animation: pulse-red 1.5s infinite; border-color: #ef4444 !important; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans pb-12">
+
+  <!-- 頂部導航列 -->
+  <header class="bg-slate-900 border-b border-slate-800 sticky top-0 z-30 px-4 py-3 backdrop-blur-md bg-opacity-90">
+    <div class="max-w-5xl mx-auto flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <i class="fa-solid fa-gamepad text-indigo-400 text-xl"></i>
+        <h1 class="font-bold text-lg tracking-wider">二遊活動進度追蹤</h1>
+      </div>
+      <div id="syncStatus" class="text-xs px-2 py-1 rounded bg-slate-800 text-slate-400 flex items-center gap-1.5">
+        <i class="fa-solid fa-arrows-rotate animate-spin"></i> 載入中...
+      </div>
+    </div>
+  </header>
+
+  <!-- 主要內容區 -->
+  <main class="max-w-5xl mx-auto px-4 mt-6">
+    <!-- 遊戲分類切換鈕 -->
+    <div class="flex flex-wrap gap-2 mb-6" id="gameFilters">
+      <button onclick="filterGame('all')" class="filter-btn active px-3.5 py-1.5 rounded-lg text-sm font-medium bg-indigo-600 text-white transition">全部遊戲</button>
+      <button onclick="filterGame('hsr')" class="filter-btn px-3.5 py-1.5 rounded-lg text-sm font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 transition">崩壞：星穹鐵道</button>
+      <button onclick="filterGame('zzz')" class="filter-btn px-3.5 py-1.5 rounded-lg text-sm font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 transition">絕區零</button>
+      <button onclick="filterGame('arknights')" class="filter-btn px-3.5 py-1.5 rounded-lg text-sm font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 transition">明日方舟</button>
+      <button onclick="filterGame('wuthering')" class="filter-btn px-3.5 py-1.5 rounded-lg text-sm font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 transition">鳴潮</button>
+    </div>
+
+    <!-- 活動卡片清單容器 -->
+    <div id="cardsContainer" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <!-- 卡片會由 JavaScript 自動產出 -->
+    </div>
+  </main>
+
+  <script>
+    // 專屬的 GitHub Pages JSON 網址
+    const ONLINE_JSON_URL = "https://jeff60811.github.io/gacha-tracker-data/data/events.json";
+    const STORAGE_KEY = "gacha_events_progress_v1";
+
+    // 預設備份資料（當尚未爬取或離線時顯示）
+    const DEFAULT_GAMES = [
+      {
+        gameId: "hsr",
+        gameName: "崩壞：星穹鐵道",
+        events: [
+          { id: "hsr_01", title: "銀河巡禮校慶活動", endTime: "2026-09-28T03:59:59+08:00", totalStages: 4, rewards: "星瓊 x1000" }
+        ]
+      },
+      {
+        gameId: "zzz",
+        gameName: "絕區零",
+        events: [
+          { id: "zzz_01", title: "虛擬殺機極限挑戰", endTime: "2026-09-23T23:59:59+08:00", totalStages: 3, rewards: "菲林 x600" }
+        ]
+      },
+      {
+        gameId: "arknights",
+        gameName: "明日方舟",
+        events: [
+          { id: "ak_01", title: "生息演算：沙洲遺聞", endTime: "2026-10-05T03:59:59+08:00", totalStages: 5, rewards: "限定幹員、尋訪憑證" }
+        ]
+      },
+      {
+        gameId: "wuthering",
+        gameName: "鳴潮",
+        events: [
+          { id: "wu_01", title: "深墜異想奇境", endTime: "2026-09-25T12:00:00+08:00", totalStages: 4, rewards: "星聲 x800" }
+        ]
+      }
+    ];
+
+    let currentGames = [];
+    let activeFilter = 'all';
+
+    // 格式化倒數時間
+    function getRemainingTime(endTimeStr) {
+      const diff = new Date(endTimeStr) - new Date();
+      if (diff <= 0) return { text: "已結束", isUrgent: false, isOver: true };
+
+      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+      const isUrgent = diff < 24 * 60 * 60 * 1000; // 小於 24 小時
+
+      if (days > 0) return { text: `${days} 天 ${hours} 小時`, isUrgent, isOver: false };
+      return { text: `${hours} 小時 ${minutes} 分`, isUrgent, isOver: false };
+    }
+
+    // 載入線上活動資料
+    async function loadData() {
+      const statusEl = document.getElementById("syncStatus");
+      let gamesData = DEFAULT_GAMES;
+
+      try {
+        const res = await fetch(ONLINE_JSON_URL, { cache: "no-cache" });
+        if (res.ok) {
+          gamesData = await res.json();
+          statusEl.innerHTML = `<i class="fa-solid fa-circle-check text-emerald-400"></i> 已連線最新時程`;
+        } else {
+          throw new Error();
+        }
+      } catch (e) {
+        statusEl.innerHTML = `<i class="fa-solid fa-cloud text-amber-400"></i> 本地備份模式`;
+      }
+
+      // 讀取本地進度並合併
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      currentGames = gamesData;
+
+      currentGames.forEach(g => {
+        g.events.forEach(ev => {
+          if (saved[ev.id]) {
+            ev.currentStage = saved[ev.id].currentStage || 0;
+            ev.isCompleted = saved[ev.id].isCompleted || false;
+          } else {
+            ev.currentStage = ev.currentStage || 0;
+            ev.isCompleted = false;
+          }
+        });
+      });
+
+      render();
+    }
+
+    // 儲存進度至 localStorage
+    function saveProgress(eventId, stage, isCompleted) {
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      saved[eventId] = { currentStage: stage, isCompleted };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+
+      currentGames.forEach(g => {
+        const ev = g.events.find(e => e.id === eventId);
+        if (ev) {
+          ev.currentStage = stage;
+          ev.isCompleted = isCompleted;
+        }
+      });
+      render();
+    }
+
+    // 點選切換進度階段
+    function setStage(eventId, targetStage, totalStages) {
+      const isDone = targetStage >= totalStages;
+      saveProgress(eventId, targetStage, isDone);
+    }
+
+    // 點選「已清空 / 未完成」按鈕
+    function toggleComplete(eventId, totalStages) {
+      const ev = currentGames.flatMap(g => g.events).find(e => e.id === eventId);
+      if (!ev) return;
+      if (ev.isCompleted) {
+        saveProgress(eventId, 0, false);
+      } else {
+        saveProgress(eventId, totalStages, true);
+      }
+    }
+
+    // 篩選遊戲類別
+    function filterGame(gameId) {
+      activeFilter = gameId;
+      document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.classList.toggle('bg-indigo-600', btn.getAttribute('onclick').includes(`'${gameId}'`));
+        btn.classList.toggle('text-white', btn.getAttribute('onclick').includes(`'${gameId}'`));
+        btn.classList.toggle('bg-slate-800', !btn.getAttribute('onclick').includes(`'${gameId}'`));
+      });
+      render();
+    }
+
+    // 繪製畫面
+    function render() {
+      const container = document.getElementById("cardsContainer");
+      container.innerHTML = "";
+
+      const filteredGames = activeFilter === 'all' 
+        ? currentGames 
+        : currentGames.filter(g => g.gameId === activeFilter);
+
+      let allEvents = [];
+      filteredGames.forEach(g => {
+        g.events.forEach(e => allEvents.push({ ...e, gameName: g.gameName }));
+      });
+
+      // 排序：未完成的小於 24 小時排最前面，已完成的放最後
+      allEvents.sort((a, b) => {
+        if (a.isCompleted !== b.isCompleted) return a.isCompleted ? 1 : -1;
+        return new Date(a.endTime) - new Date(b.endTime);
+      });
+
+      allEvents.forEach(ev => {
+        const timeInfo = getRemainingTime(ev.endTime);
+        const card = document.createElement("div");
+
+        card.className = `p-4 rounded-xl border transition-all ${
+          ev.isCompleted 
+            ? "bg-slate-900/50 border-slate-800/80 opacity-60" 
+            : timeInfo.isUrgent 
+              ? "bg-slate-900 border-red-500/80 urgent-glow" 
+              : "bg-slate-900 border-slate-800"
+        }`;
+
+        let stagesHtml = "";
+        for (let i = 1; i <= ev.totalStages; i++) {
+          const isFilled = i <= ev.currentStage;
+          stagesHtml += `
+            <button onclick="setStage('${ev.id}', ${i}, ${ev.totalStages})" 
+              class="h-7 w-7 rounded-lg text-xs font-semibold flex items-center justify-center transition-all ${
+                isFilled ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+              }">
+              ${i}
+            </button>
+          `;
+        }
+
+        card.innerHTML = `
+          <div class="flex justify-between items-start gap-2 mb-2">
+            <div>
+              <span class="text-xs px-2 py-0.5 rounded font-medium bg-slate-800 text-indigo-300 mb-1 inline-block">${ev.gameName}</span>
+              <h3 class="font-bold text-base ${ev.isCompleted ? 'line-through text-slate-400' : 'text-slate-100'}">${ev.title}</h3>
+            </div>
+            <span class="text-xs px-2 py-1 rounded-full font-medium ${
+              timeInfo.isUrgent ? 'bg-red-500/20 text-red-400 font-bold' : 'bg-slate-800 text-slate-300'
+            }">
+              <i class="fa-regular fa-clock mr-1"></i>${timeInfo.text}
+            </span>
+          </div>
+
+          <div class="text-xs text-slate-400 mb-3 flex items-center gap-1.5">
+            <i class="fa-solid fa-gift text-amber-400"></i> ${ev.rewards || "一般活動獎勵"}
+          </div>
+
+          <div class="flex items-center justify-between pt-2 border-t border-slate-800/70">
+            <div class="flex items-center gap-1">
+              ${stagesHtml}
+            </div>
+            <button onclick="toggleComplete('${ev.id}', ${ev.totalStages})" class="text-xs px-3 py-1.5 rounded-lg border font-medium transition ${
+              ev.isCompleted 
+                ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-400' 
+                : 'border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700'
+            }">
+              ${ev.isCompleted ? '✓ 已清空' : '標記完成'}
+            </button>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    loadData();
+    setInterval(render, 60000); // 每分鐘更新一次倒數文字
+  </script>
+</body>
+</html>
